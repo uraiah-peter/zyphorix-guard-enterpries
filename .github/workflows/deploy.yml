@@ -1,0 +1,58 @@
+# ─── Zyphorix Guard — Vercel Production Deploy ────────────────────────────
+# Triggers on push to main after CI passes.
+
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build project artifacts
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        id: deploy
+        run: |
+          URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Run post-deploy Prisma migrations
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+      - name: Notify deployment success
+        if: success()
+        run: echo "✅ Deployed to ${{ steps.deploy.outputs.url }}"
+
+      - name: Notify deployment failure
+        if: failure()
+        run: echo "❌ Deployment failed — check Vercel dashboard"
+
+# Required GitHub secrets:
+# VERCEL_TOKEN         — from vercel.com/account/tokens
+# VERCEL_ORG_ID        — from .vercel/project.json after `vercel link`
+# VERCEL_PROJECT_ID    — from .vercel/project.json after `vercel link`
+# DATABASE_URL         — Neon PostgreSQL connection string
+# DIRECT_URL           — Neon direct connection string (for migrations)

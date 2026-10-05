@@ -1,0 +1,60 @@
+# ─── Zyphorix Guard — Local Development Environment ───────────────────────
+# Usage: docker compose up -d
+# Then:  npm run dev (Next.js still runs locally for hot reload)
+
+version: '3.9'
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:16-alpine
+    container_name: zyphorix-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zyphorix
+      POSTGRES_PASSWORD: zyphorix_dev_password
+      POSTGRES_DB: zyphorix_guard
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U zyphorix']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis (Upstash-compatible)
+  redis:
+    image: redis:7-alpine
+    container_name: zyphorix-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PgAdmin (optional — comment out if not needed)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: zyphorix-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@zyphorix.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - '5050:80'
+    depends_on:
+      - postgres
+    profiles:
+      - tools
+
+volumes:
+  postgres_data:
+  redis_data:

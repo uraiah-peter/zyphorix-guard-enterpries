@@ -1,0 +1,610 @@
+// ─────────────────────────────────────────────────────────────────────────
+// Zyphorix Guard Enterprise — Prisma Schema
+//
+// NOTE: This schema was reconstructed by Claude on 2026-09-01 because
+// prisma/schema.prisma was missing from the project export. Every model,
+// field, type, and enum value below was inferred by systematically
+// cross-referencing:
+//   - every `db.<model>.<method>()` call and its `data` / `select` / `include`
+//     blocks across app/api and lib
+//   - every zod validation schema in lib/validations/
+//   - every `import type { X } from '@prisma/client'` usage
+//   - lib/auth.ts (NextAuth + PrismaAdapter, which requires the standard
+//     Account/Session/VerificationToken shapes)
+//   - lib/audit.ts and lib/notifications.ts (exact enum values used)
+//
+// This is a best-effort reconstruction, not a recovered original. Review
+// carefully before running `prisma db push` against real data — in
+// particular check field types/precision, @@index choices, and cascade
+// behavior on relations, none of which are recoverable from code alone.
+// ─────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+  BUSINESS
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+enum ScanType {
+  URL
+  EMAIL
+  FILE
+  DOMAIN_IP
+  CLOUD
+}
+
+enum ScanStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum RiskLevel {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AssetType {
+  DOMAIN
+  IP_ADDRESS
+  SERVER
+  ENDPOINT
+  CLOUD_RESOURCE
+  EMAIL_ACCOUNT
+  APPLICATION
+}
+
+enum IncidentSeverity {
+  P1_CRITICAL
+  P2_HIGH
+  P3_MEDIUM
+  P4_LOW
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  CONTAINED
+  RESOLVED
+  CLOSED
+}
+
+enum IntegrationProvider {
+  SLACK
+  DISCORD
+  TEAMS
+  WEBHOOK
+}
+
+enum IntegrationEvent {
+  THREAT_DETECTED
+  CRITICAL_THREAT
+  INCIDENT_CREATED
+  INCIDENT_P1
+  CLOUD_ISSUE_FOUND
+  SCAN_COMPLETED
+  MEMBER_JOINED
+  WEEKLY_DIGEST
+}
+
+enum PlaybookTrigger {
+  SCAN_CRITICAL
+  SCAN_HIGH
+  SCAN_URL_CRITICAL
+  SCAN_EMAIL_HIGH
+  SCAN_FILE_CRITICAL
+  SCAN_CLOUD_HIGH
+  INCIDENT_P1
+  INCIDENT_P2
+  ANY_INCIDENT
+}
+
+enum PlaybookRunStatus {
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum LogLevel {
+  debug
+  info
+  warn
+  error
+  critical
+}
+
+enum NotificationType {
+  THREAT_DETECTED
+  CLOUD_ISSUE_FOUND
+  INCIDENT_CREATED
+  MEMBER_JOINED
+  USAGE_LIMIT_WARNING
+  PLAN_EXPIRING
+}
+
+enum AuditAction {
+  ORG_CREATED
+  ORG_UPDATED
+  ORG_SETTINGS_UPDATED
+  MEMBER_INVITED
+  MEMBER_ROLE_CHANGED
+  MEMBER_REMOVED
+  API_KEY_CREATED
+  API_KEY_REVOKED
+  SCAN_CREATED
+  SCAN_COMPLETED
+  INCIDENT_CREATED
+  INCIDENT_UPDATED
+  INCIDENT_RESOLVED
+  INCIDENT_CLOSED
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_UPDATED
+  SUBSCRIPTION_CANCELED
+}
+
+// ─── Auth (NextAuth / Auth.js — PrismaAdapter standard shapes) ─────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  password      String? // bcrypt hash, credentials provider only
+  deletedAt     DateTime? // set when the account is deleted; personal fields are blanked, row is kept (anonymized) so historical scans/incidents/audit entries created by this user remain intact for their former organizations
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  memberships       OrganizationMember[] @relation("MemberUser")
+  invitedMembers    OrganizationMember[] @relation("InvitedBy")
+  createdScans      Scan[]
+  createdApiKeys    ApiKey[]
+  incidentsAssigned Incident[]
+  incidentUpdates   IncidentUpdate[]
+  notifications     UserNotification[]
+  auditLogs         AuditLog[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Organization ───────────────────────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  industry  String?
+  size      String?
+  website   String?
+  logoUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members         OrganizationMember[]
+  settings        OrganizationSettings?
+  subscription    Subscription?
+  apiKeys         ApiKey[]
+  assets          Asset[]
+  scans           Scan[]
+  incidents       Incident[]
+  cloudConnections CloudConnection[]
+  integrations    Integration[]
+  playbooks       Playbook[]
+  logEntries      LogEntry[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+}
+
+model OrganizationMember {
+  id             String     @id @default(cuid())
+  organizationId String
+  userId         String
+  role           MemberRole @default(ANALYST)
+  invitedById    String?
+  joinedAt       DateTime   @default(now())
+  createdAt      DateTime   @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation("MemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy    User?        @relation("InvitedBy", fields: [invitedById], references: [id])
+
+  @@unique([organizationId, userId])
+}
+
+model OrganizationSettings {
+  id                     String   @id @default(cuid())
+  organizationId         String   @unique
+  allowedDomains         String[] @default([])
+  mfaRequired            Boolean  @default(false)
+  sessionTimeoutMinutes  Int      @default(1440)
+  scanRetentionDays      Int      @default(90)
+  auditLogRetentionDays  Int      @default(365)
+  notificationsEnabled   Boolean  @default(true)
+  weeklyReportEnabled    Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model Subscription {
+  id                    String              @id @default(cuid())
+  organizationId        String              @unique
+  plan                  Plan                @default(FREE)
+  status                SubscriptionStatus  @default(ACTIVE)
+  stripeCustomerId      String?             @unique
+  stripeSubscriptionId  String?             @unique
+  stripePriceId         String?
+  trialEndsAt           DateTime?
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  cancelAtPeriodEnd     Boolean             @default(false)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  usageRecords  UsageRecord[]
+}
+
+model UsageRecord {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  metric         String // 'scans' | 'ai_queries'
+  quantity       Int      @default(1)
+  recordedAt     DateTime @default(now())
+  periodStart    DateTime
+  periodEnd      DateTime
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, metric, recordedAt])
+}
+
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String
+  createdById    String
+  name           String
+  keyHash        String    @unique
+  keyPrefix      String
+  permissions    String[]  @default([])
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation(fields: [createdById], references: [id])
+}
+
+// ─── Assets ─────────────────────────────────────────────────────────────
+
+model Asset {
+  id             String    @id @default(cuid())
+  organizationId String
+  type           AssetType
+  name           String
+  value          String
+  tags           String[]  @default([])
+  riskScore      Int?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, type])
+}
+
+// ─── Scans ──────────────────────────────────────────────────────────────
+
+model Scan {
+  id             String     @id @default(cuid())
+  organizationId String
+  createdById    String
+  type           ScanType
+  status         ScanStatus @default(QUEUED)
+  input          String     @db.Text
+  inputHash      String?
+  engineVersion  String?
+  riskScore      Int?
+  riskLevel      RiskLevel?
+  classification String?
+  summary        String?    @db.Text
+  startedAt      DateTime?
+  completedAt    DateTime?
+  durationMs     Int?
+  createdAt      DateTime   @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User          @relation(fields: [createdById], references: [id])
+  findings     ScanFinding[]
+  report       ScanReport?
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, type])
+  @@index([organizationId, riskLevel])
+}
+
+model ScanFinding {
+  id          String    @id @default(cuid())
+  scanId      String
+  title       String
+  description String    @db.Text
+  severity    RiskLevel
+  category    String?
+  indicator   String?
+  mitreAttack String?
+  evidence    Json?
+  createdAt   DateTime  @default(now())
+
+  scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId])
+}
+
+model ScanReport {
+  id                String   @id @default(cuid())
+  scanId            String   @unique
+  executiveSummary  String?  @db.Text
+  technicalDetails  Json?
+  recommendations   Json?
+  aiExplanation     String?  @db.Text
+  mitreMapping      Json?
+  createdAt         DateTime @default(now())
+
+  scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+}
+
+// ─── Cloud Security ─────────────────────────────────────────────────────
+
+model CloudConnection {
+  id             String   @id @default(cuid())
+  organizationId String
+  provider       String   @default("AWS")
+  name           String
+  accountId      String
+  credentialsRef String // role ARN
+  region         String   @default("us-east-1")
+  isActive       Boolean  @default(true)
+  lastSyncedAt   DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// ─── Incidents ──────────────────────────────────────────────────────────
+
+model Incident {
+  id             String           @id @default(cuid())
+  organizationId String
+  title          String
+  description    String           @db.Text
+  severity       IncidentSeverity
+  status         IncidentStatus   @default(OPEN)
+  assignedToId   String?
+  resolvedAt     DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTo   User?            @relation(fields: [assignedToId], references: [id])
+  updates      IncidentUpdate[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, severity])
+}
+
+model IncidentUpdate {
+  id         String   @id @default(cuid())
+  incidentId String
+  authorId   String
+  content    String   @db.Text
+  createdAt  DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  author   User     @relation(fields: [authorId], references: [id])
+
+  @@index([incidentId])
+}
+
+// ─── Integrations ───────────────────────────────────────────────────────
+
+model Integration {
+  id             String              @id @default(cuid())
+  organizationId String
+  provider       IntegrationProvider
+  name           String
+  webhookUrl     String
+  events         IntegrationEvent[]  @default([])
+  secret         String?
+  isActive       Boolean             @default(true)
+  lastUsedAt     DateTime?
+  lastError      String?
+  createdAt      DateTime            @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// ─── Playbooks (automation) ─────────────────────────────────────────────
+
+model Playbook {
+  id             String          @id @default(cuid())
+  organizationId String
+  name           String
+  description    String          @default("")
+  trigger        PlaybookTrigger
+  conditions     Json            @default("[]")
+  actions        Json
+  isActive       Boolean         @default(true)
+  runCount       Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  runs         PlaybookRun[]
+
+  @@index([organizationId])
+}
+
+model PlaybookRun {
+  id          String            @id @default(cuid())
+  playbookId  String
+  triggerType String
+  status      PlaybookRunStatus
+  results     Json              @default("[]")
+  durationMs  Int?
+  createdAt   DateTime          @default(now())
+
+  playbook Playbook @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+
+  @@index([playbookId, createdAt])
+}
+
+// ─── Log Ingestion ──────────────────────────────────────────────────────
+
+model LogEntry {
+  id             String   @id @default(cuid())
+  organizationId String
+  source         String
+  level          LogLevel
+  message        String   @db.Text
+  metadata       Json?
+  timestamp      DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, timestamp])
+  @@index([organizationId, level])
+}
+
+// ─── Notifications ──────────────────────────────────────────────────────
+
+model Notification {
+  id             String            @id @default(cuid())
+  organizationId String
+  type           NotificationType
+  title          String
+  message        String            @db.Text
+  severity       RiskLevel?
+  actionUrl      String?
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recipients   UserNotification[]
+
+  @@index([organizationId, createdAt])
+}
+
+model UserNotification {
+  id             String    @id @default(cuid())
+  notificationId String
+  userId         String
+  readAt         DateTime?
+  dismissedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([userId, dismissedAt])
+}
+
+// ─── Audit Log ──────────────────────────────────────────────────────────
+
+model AuditLog {
+  id             String      @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         AuditAction
+  resource       String?
+  resourceId     String?
+  metadata       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, action])
+}
