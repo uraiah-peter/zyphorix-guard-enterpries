@@ -48,3 +48,6 @@ docker/volumes/
 
 # Type coverage
 .nyc_output/
+
+.vercel
+.env*
