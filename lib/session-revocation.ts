@@ -67,6 +67,14 @@ export async function revokeAllSessions(userId: string): Promise<void> {
 export async function getRevokedAt(userId: string): Promise<number | null> {
   const r = getRedis();
   if (!r) return null;
-  const value = await r.get<number>(key(userId));
-  return typeof value === 'number' ? value : null;
+  try {
+    const value = await r.get<number>(key(userId));
+    return typeof value === 'number' ? value : null;
+  } catch {
+    // Redis is an optional session-revocation enhancement.
+    // Never allow Redis outages to break authentication.
+    return null;
+  }
 }
+
+
