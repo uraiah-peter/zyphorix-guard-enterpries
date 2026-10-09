@@ -1,13 +1,13 @@
-import { Ratelimit } from '@upstash/ratelimit';
+﻿import { Ratelimit } from '@upstash/ratelimit';
 import { Redis } from '@upstash/redis';
 import { NextResponse } from 'next/server';
 
-// ─── Rate Limiting ──────────────────────────────────────────────────────────
+// â”€â”€â”€ Rate Limiting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Limits match what SECURITY.md documents. Backed by Upstash Redis in any
 // environment where it's configured (required for correctness across
 // multiple serverless instances). Falls back to an in-memory limiter
 // otherwise so local development / a misconfigured deploy still gets *some*
-// protection rather than silently allowing everything through — but the
+// protection rather than silently allowing everything through â€” but the
 // in-memory fallback is per-process only and is NOT a substitute for Redis
 // in a real multi-instance deployment.
 
@@ -58,7 +58,7 @@ function getUpstashLimiter(name: LimiterName): Ratelimit | null {
   return rl;
 }
 
-// In-memory fallback — per-process, best-effort only.
+// In-memory fallback â€” per-process, best-effort only.
 const memoryStore = new Map<string, { count: number; resetAt: number }>();
 let lastCleanup = Date.now();
 function memoryLimit(key: string, limit: number, windowMs: number) {
@@ -88,12 +88,28 @@ export interface RateLimitResult {
 export async function checkRateLimit(name: LimiterName, identifier: string): Promise<RateLimitResult> {
   const cfg = LIMITS[name];
   const upstash = getUpstashLimiter(name);
+
   if (upstash) {
-    const result = await upstash.limit(identifier);
-    return { success: result.success, limit: result.limit, remaining: result.remaining, reset: result.reset };
+    try {
+      const result = await upstash.limit(identifier);
+      return {
+        success: result.success,
+        limit: result.limit,
+        remaining: result.remaining,
+        reset: result.reset,
+      };
+    } catch {
+      // Redis is unavailable: fall back to per-instance in-memory rate limiting.
+    }
   }
+
   const result = memoryLimit(`${name}:${identifier}`, cfg.limit, cfg.windowMs);
-  return { success: result.success, limit: cfg.limit, remaining: result.remaining, reset: result.reset };
+  return {
+    success: result.success,
+    limit: cfg.limit,
+    remaining: result.remaining,
+    reset: result.reset,
+  };
 }
 
 export function rateLimitResponse(result: RateLimitResult): NextResponse {
@@ -118,3 +134,4 @@ export function getClientIp(req: Request): string {
   if (real) return real;
   return 'unknown';
 }
+
